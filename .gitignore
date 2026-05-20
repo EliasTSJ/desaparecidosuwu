@@ -1,0 +1,29 @@
+# Datos scrapeados
+data/*.csv
+data/*.json
+data/*.xlsx
+
+# HAR files
+*.har
+
+# Python
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# IDE
+.vscode/
+.idea/
+.marimo/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Env
+.env
+.env.*
