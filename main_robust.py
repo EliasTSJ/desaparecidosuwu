@@ -67,8 +67,6 @@ async def main_scrape():
 
     tasks = []
     for estado_id, estado_nombre in sorted(ESTADOS.items(), key=lambda x: int(x[0])):
-        if estado_id == "33":
-            continue
         tasks.append(scrape_one(estado_id, estado_nombre))
 
     reports = await asyncio.gather(*tasks, return_exceptions=True)

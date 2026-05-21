@@ -27,7 +27,7 @@ from .api_httpx import ConsultaAPIHttpx
 from .parser import parse_search_response
 from .pipeline import build_filtros
 
-DEFAULT_CHUNK_LIMIT = 5000
+DEFAULT_CHUNK_LIMIT = 2000
 DEFAULT_ROWS_PER_PAGE = 1000
 DEFAULT_MAX_RETRIES = 5
 DEFAULT_TOKEN_TTL = 3300
@@ -52,7 +52,22 @@ class TokenManager:
 
     async def get_count(self, filtros: dict) -> int:
         await self.ensure_token()
-        return await self._api.get_count(filtros)
+        last_error = None
+        for attempt in range(DEFAULT_MAX_RETRIES + 1):
+            try:
+                return await self._api.get_count(filtros)
+            except Exception as e:
+                last_error = e
+                msg = str(e).lower()
+                if attempt < DEFAULT_MAX_RETRIES and any(
+                    k in msg for k in ("econn", "timeout", "refused", "reset", "read", "unexpected")
+                ):
+                    wait = (2 ** attempt) + random.uniform(0, 0.5)
+                    await asyncio.sleep(wait)
+                    await self.refresh()
+                    continue
+                raise
+        raise last_error
 
     async def search_page(self, filtros: dict, rows: int, page: int) -> dict:
         await self.ensure_token()
@@ -323,6 +338,13 @@ class CheckpointManager:
         self.state["total_expected"] = total
         self._save()
 
+    def get_conf_count(self) -> int:
+        return self.state.get("conf_count", 0)
+
+    def set_conf_count(self, count: int):
+        self.state["conf_count"] = count
+        self._save()
+
     def get_pages_done(self) -> set[int]:
         return set(self.state["pages_done"])
 
@@ -338,6 +360,8 @@ class CheckpointManager:
     def save_page(self, page: int, records: list[dict]):
         """Guarda una pagina de registros al archivo temporal y actualiza checkpoint."""
         self.state["pages_done"].append(page)
+        conf_in_page = sum(1 for r in records if r.get("nombre") == "CONFIDENCIAL")
+        self.state["conf_saved_in_chunk"] = self.state.get("conf_saved_in_chunk", 0) + conf_in_page
         with open(self.tmp_path, "a", encoding="utf-8") as f:
             for rec in records:
                 f.write(json.dumps(rec, ensure_ascii=False) + "\n")
@@ -377,6 +401,10 @@ class CheckpointManager:
                     writer.writeheader()
                 writer.writerows(records)
             self.state["total_saved"] += len(records)
+
+        conf_in_chunk = self.state.pop("conf_saved_in_chunk", 0)
+        if conf_in_chunk > 0:
+            self.state["conf_count"] = conf_in_chunk
 
         self.state["chunks_done"].append(chunk_key)
         self.state["chunk_in_progress"] = None
@@ -440,6 +468,7 @@ async def scrape_chunk(
     chunk: Chunk,
     ckpt: CheckpointManager,
     rows_per_page: int = DEFAULT_ROWS_PER_PAGE,
+    is_first_chunk: bool = False,
 ) -> int:
     """Pagina un rango de fechas y guarda los registros incrementalmente."""
     chunk_key = chunk.key
@@ -456,7 +485,7 @@ async def scrape_chunk(
     )
 
     total_pages = math.ceil(chunk.expected_count / rows_per_page)
-    validator = PageValidator(rows_per_page)
+    validator = PageValidator(rows_per_page) if is_first_chunk else None
     pages_done = ckpt.get_pages_done()
     records_scraped = 0
 
@@ -468,8 +497,12 @@ async def scrape_chunk(
             data = await fetch_page_with_retry(api, filtros, page, rows_per_page)
             records = parse_search_response(data)
 
+            if not is_first_chunk:
+                records = [r for r in records if r["nombre"] != "CONFIDENCIAL"]
+
             is_last = page == total_pages
-            validator.validate(page, len(records), is_last)
+            if validator:
+                validator.validate(page, len(records), is_last)
 
             ckpt.save_page(page, records)
             records_scraped += len(records)
@@ -480,7 +513,7 @@ async def scrape_chunk(
         if page < total_pages:
             await asyncio.sleep(DELAY_BETWEEN_PAGES)
 
-    if validator.truncation_detected:
+    if validator and validator.truncation_detected:
         ckpt.mark_truncation()
 
     ckpt.finish_chunk()
@@ -585,8 +618,10 @@ async def scrape_estado(
             flush=True,
         )
 
-        for chunk in chunks:
-            await scrape_chunk(api, estado_id, estado_nombre, chunk, ckpt, rows_per_page)
+        for i, chunk in enumerate(chunks):
+            is_first = (i == 0)
+            await scrape_chunk(api, estado_id, estado_nombre, chunk, ckpt, rows_per_page,
+                               is_first_chunk=is_first)
 
         print(f" \u2713 ({ckpt.state['total_saved']})")
 

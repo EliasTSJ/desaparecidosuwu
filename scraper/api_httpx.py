@@ -80,6 +80,8 @@ class ConsultaAPIHttpx:
                 except ValueError:
                     pass
             if isinstance(value, dict):
+                if not value:
+                    return 0
                 if "code" in value:
                     raise RuntimeError(f"Count error: {value.get('code')}")
                 if "total" in value:
