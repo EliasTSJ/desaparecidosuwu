@@ -74,9 +74,20 @@ class ConsultaAPIHttpx:
             value = result["data"]
             if isinstance(value, (int, float)):
                 return int(value)
-            if isinstance(value, dict) and "code" in value:
-                raise RuntimeError(f"Count error: {value.get('code')}")
-            return int(value)
+            if isinstance(value, str):
+                try:
+                    return int(value)
+                except ValueError:
+                    pass
+            if isinstance(value, dict):
+                if "code" in value:
+                    raise RuntimeError(f"Count error: {value.get('code')}")
+                if "total" in value:
+                    return int(value["total"])
+                if "data" in value and isinstance(value["data"], (int, float)):
+                    return int(value["data"])
+                raise RuntimeError(f"Count unexpected dict: {value}")
+            raise RuntimeError(f"Count unexpected type: {type(value)} = {value}")
         raise RuntimeError(f"Count error: {data}")
 
     async def search_page(
