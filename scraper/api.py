@@ -72,8 +72,14 @@ class ConsultaAPI:
             headers=self._headers(),
         )
         data = resp.json()
-        if data.get("result", {}).get("success"):
-            return data["result"]["data"]
+        result = data.get("result", {})
+        if result.get("success"):
+            value = result["data"]
+            if isinstance(value, (int, float)):
+                return int(value)
+            if isinstance(value, dict) and "code" in value:
+                raise RuntimeError(f"Count error: {value.get('code')} - {value}")
+            return int(value)
         raise RuntimeError(f"Count error: {data}")
 
     def search_page(
